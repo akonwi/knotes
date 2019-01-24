@@ -12,7 +12,7 @@ extern crate serde_derive;
 extern crate validator_derive;
 extern crate jsonwebtoken as jwt;
 
-use bcrypt::{hash, DEFAULT_COST};
+use bcrypt::{hash, verify, DEFAULT_COST};
 use jwt::{decode, encode, Algorithm, Header, Validation};
 use mongodb::db::ThreadedDatabase;
 use mongodb::Document;
@@ -28,11 +28,15 @@ struct RegistrationParams {
     pub password: String,
 }
 
+type LoginParams = RegistrationParams;
+
 #[derive(Serialize)]
 pub struct User {
     pub id: String,
     pub email: String,
     pub access_token: Option<String>,
+    #[serde(skip_serializing)]
+    password: String,
 }
 
 impl User {
@@ -40,11 +44,16 @@ impl User {
         User {
             id: doc.get_object_id("_id").ok().unwrap().to_string(),
             email: doc.get_str("email").unwrap().to_string(),
+            password: doc.get_str("password").unwrap().to_string(),
             access_token: match doc.get_str("access_token") {
                 Ok(str) => Some(String::from(str)),
                 Err(_) => None,
             },
         }
+    }
+
+    pub fn password(&self) -> &str {
+        &self.password[..]
     }
 }
 
@@ -71,7 +80,7 @@ mod user {
     use super::User;
     use mongodb::coll::Collection;
 
-    pub fn get_by_email(email: &str, coll: Collection) -> Option<User> {
+    pub fn get_by_email(email: &str, coll: &Collection) -> Option<User> {
         match coll.find_one(Some(doc! { "email": email}), None).unwrap() {
             Some(user_doc) => Some(User::from(user_doc)),
             None => None,
@@ -96,6 +105,11 @@ impl CreateUserError {
             CreateUserError::TokenError => "Unable to create token",
         }
     }
+}
+
+#[derive(Serialize)]
+enum AuthenticationError {
+    InvalidCredentials,
 }
 
 fn create_token() -> Result<String, CreateUserError> {
@@ -133,7 +147,7 @@ fn create_user(
 ) -> Result<User, CreateUserError> {
     let collection = conn.collection("users");
 
-    if let Some(_) = user::get_by_email(email, collection) {
+    if let Some(_) = user::get_by_email(email, &collection) {
         return Err(CreateUserError::AlreadyExists);
     };
 
@@ -183,12 +197,45 @@ fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonV
     }
 }
 
+#[post("/auth/login", data = "<params>")]
+fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
+    fn failed() -> JsonValue {
+        not_ok(json!({
+            "type": AuthenticationError::InvalidCredentials,
+            "message": "Email and password combination is invalid"
+        }))
+    }
+
+    if params.password.len() == 0 || params.email.len() == 0 {
+        return failed();
+    }
+
+    let u = match user::get_by_email(&params.email, &conn.collection("users")) {
+        None => return failed(),
+        Some(u) => u,
+    };
+
+    match verify(&params.password, &u.password) {
+        Ok(b) => {
+            if b {
+                ok(json!({ "user": u }))
+            } else {
+                failed()
+            }
+        }
+        Err(e) => {
+            println!("Error verifying password: #{:?}", e);
+            failed()
+        }
+    }
+}
+
 #[database("knotes")]
 struct KnotesDBConnection(mongodb::db::Database);
 
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
-        .mount("/", routes![register])
+        .mount("/", routes![register, login])
         .launch();
 }
