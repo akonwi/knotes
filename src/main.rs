@@ -10,8 +10,10 @@ extern crate rocket_contrib;
 extern crate serde_derive;
 #[macro_use]
 extern crate validator_derive;
+extern crate jsonwebtoken as jwt;
 
 use bcrypt::{hash, DEFAULT_COST};
+use jwt::{decode, encode, Algorithm, Header, Validation};
 use mongodb::db::ThreadedDatabase;
 use mongodb::Document;
 use rocket_contrib::json::{Json, JsonValue};
@@ -30,6 +32,7 @@ struct RegistrationParams {
 pub struct User {
     pub id: String,
     pub email: String,
+    pub access_token: Option<String>,
 }
 
 impl User {
@@ -37,6 +40,10 @@ impl User {
         User {
             id: doc.get_object_id("_id").ok().unwrap().to_string(),
             email: doc.get_str("email").unwrap().to_string(),
+            access_token: match doc.get_str("access_token") {
+                Ok(str) => Some(String::from(str)),
+                Err(_) => None,
+            },
         }
     }
 }
@@ -67,7 +74,7 @@ mod user {
     pub fn get_by_email(email: &str, coll: Collection) -> Option<User> {
         match coll.find_one(Some(doc! { "email": email}), None).unwrap() {
             Some(user_doc) => Some(User::from(user_doc)),
-            None => None
+            None => None,
         }
     }
 }
@@ -77,6 +84,7 @@ enum CreateUserError {
     AlreadyExists,
     InvalidAttributes,
     DBWrite,
+    TokenError,
 }
 
 impl CreateUserError {
@@ -84,24 +92,61 @@ impl CreateUserError {
         match self {
             CreateUserError::AlreadyExists => "Email is in use",
             CreateUserError::InvalidAttributes => "Attributes are invalid",
-            CreateUserError::DBWrite => "There was an error writing to the databse"
+            CreateUserError::DBWrite => "There was an error writing to the databse",
+            CreateUserError::TokenError => "Unable to create token",
         }
     }
 }
 
-fn create_user(conn: &mongodb::db::Database, email: &str, password: &str) -> Result<User, CreateUserError> {
+fn create_token() -> Result<String, CreateUserError> {
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Claims {
+        sub: String,
+        company: String,
+        exp: u64,
+    };
+
+    let my_claims = Claims {
+        sub: "knotes.com".to_owned(),
+        company: "akonwi".to_owned(),
+        exp: 10000000000,
+    };
+    let key = "secret"; // externalize
+
+    let mut header = Header::default();
+    header.kid = Some("signing_key".to_owned()); // externalize key
+    header.alg = Algorithm::HS512;
+
+    match encode(&header, &my_claims, key.as_ref()) {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            println!("There was an error creating a jwt token: {:?}", e);
+            Err(CreateUserError::TokenError)
+        }
+    }
+}
+
+fn create_user(
+    conn: &mongodb::db::Database,
+    email: &str,
+    password: &str,
+) -> Result<User, CreateUserError> {
     let collection = conn.collection("users");
 
     if let Some(_) = user::get_by_email(email, collection) {
-        return Err(CreateUserError::AlreadyExists)
+        return Err(CreateUserError::AlreadyExists);
     };
 
     let hashed_pw = hash(&password, DEFAULT_COST).unwrap();
 
-    // generate access_token
+    let token = create_token()?;
+
     let coll = conn.collection("users");
     let result = coll
-        .insert_one(doc! {"email": email, "password": hashed_pw}, None)
+        .insert_one(
+            doc! {"email": email, "password": hashed_pw, "access_token": token},
+            None,
+        )
         .unwrap();
     match coll
         .find_one(Some(doc! {"_id": result.inserted_id.unwrap()}), None)
