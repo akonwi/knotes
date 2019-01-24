@@ -27,7 +27,7 @@ struct RegistrationParams {
 }
 
 #[derive(Serialize)]
-struct User {
+pub struct User {
     pub id: String,
     pub email: String,
 }
@@ -46,11 +46,6 @@ struct UserResponse {
     user: User,
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
-    message: String,
-}
-
 fn ok<T: Serialize>(body: T) -> JsonValue {
     json!({
         "status": "ok",
@@ -65,9 +60,45 @@ fn not_ok<T: Serialize>(body: T) -> JsonValue {
     })
 }
 
-fn create_user(conn: &mongodb::db::Database, email: &str, password: &str) -> Result<User, ()> {
+mod user {
+    use super::User;
+    use mongodb::coll::Collection;
+
+    pub fn get_by_email(email: &str, coll: Collection) -> Option<User> {
+        match coll.find_one(Some(doc! { "email": email}), None).unwrap() {
+            Some(user_doc) => Some(User::from(user_doc)),
+            None => None
+        }
+    }
+}
+
+#[derive(Serialize)]
+enum CreateUserError {
+    AlreadyExists,
+    InvalidAttributes,
+    DBWrite,
+}
+
+impl CreateUserError {
+    fn message(self) -> &'static str {
+        match self {
+            CreateUserError::AlreadyExists => "Email is in use",
+            CreateUserError::InvalidAttributes => "Attributes are invalid",
+            CreateUserError::DBWrite => "There was an error writing to the databse"
+        }
+    }
+}
+
+fn create_user(conn: &mongodb::db::Database, email: &str, password: &str) -> Result<User, CreateUserError> {
+    let collection = conn.collection("users");
+
+    if let Some(_) = user::get_by_email(email, collection) {
+        return Err(CreateUserError::AlreadyExists)
+    };
+
     let hashed_pw = hash(&password, DEFAULT_COST).unwrap();
 
+    // generate access_token
     let coll = conn.collection("users");
     let result = coll
         .insert_one(doc! {"email": email, "password": hashed_pw}, None)
@@ -77,7 +108,7 @@ fn create_user(conn: &mongodb::db::Database, email: &str, password: &str) -> Res
         .unwrap()
     {
         Some(doc) => Ok(User::from(doc)),
-        None => Err(()),
+        None => Err(CreateUserError::DBWrite),
     }
 }
 
@@ -87,10 +118,11 @@ fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonV
         Ok(_) => {
             let user = match create_user(&conn, &params.email, &params.password) {
                 Ok(user) => user,
-                Err(_) => {
-                    return not_ok(ErrorResponse {
-                        message: String::from("Failed to create User"),
-                    });
+                Err(e) => {
+                    return not_ok(json!({
+                        "type": e,
+                        "message": e.message(),
+                    }));
                 }
             };
 
@@ -98,7 +130,11 @@ fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonV
                 "user": user,
             }))
         }
-        Err(e) => not_ok(e),
+        Err(e) => not_ok(json!({
+            "type": CreateUserError::InvalidAttributes,
+            "message": CreateUserError::InvalidAttributes.message(),
+            "errors": e
+        })),
     }
 }
 
