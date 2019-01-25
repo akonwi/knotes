@@ -17,7 +17,7 @@ pub fn create() -> Result<String, ()> {
         company: COMPANY.to_owned(),
         exp: 10000000000,
     };
-    
+
     match encode(&Header::default(), &my_claims, KEY.as_ref()) {
         Ok(t) => Ok(t),
         Err(e) => {
