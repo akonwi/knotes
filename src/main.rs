@@ -13,7 +13,6 @@ extern crate validator_derive;
 extern crate jsonwebtoken as jwt;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use jwt::{decode, encode, Header, Validation};
 use mongodb::db::ThreadedDatabase;
 use mongodb::Document;
 use rocket::http::Status;
@@ -22,6 +21,8 @@ use rocket::Outcome;
 use rocket_contrib::json::{Json, JsonValue};
 use serde::Serialize;
 use validator::Validate;
+
+mod access_token;
 
 #[derive(Deserialize, Serialize, Validate)]
 struct RegistrationParams {
@@ -71,15 +72,15 @@ impl<'a, 'r> FromRequest<'a, 'r> for User {
             Some(header) => &header[7..],
         };
 
-        if is_token_valid(token) == false {
+        if access_token::is_valid(token) == false {
             println!("token is invalid");
-            return failed()
+            return failed();
         };
 
         let db = request.guard::<KnotesDBConnection>()?;
         match user::get_by_access_token(token, &db.collection("users")) {
             Some(user) => Outcome::Success(user),
-            _ => failed()
+            _ => failed(),
         }
     }
 }
@@ -144,46 +145,6 @@ enum AuthenticationError {
     InvalidCredentials,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    company: String,
-    exp: u64,
-}
-
-const key: &str = "secret"; // externalize
-const sub: &str = "knotes.com";
-
-fn create_token() -> Result<String, CreateUserError> {
-    let my_claims = Claims {
-        sub: sub.to_owned(),
-        company: "akonwi".to_owned(),
-        exp: 10000000000,
-    };
-
-    match encode(&Header::default(), &my_claims, key.as_ref()) {
-        Ok(t) => Ok(t),
-        Err(e) => {
-            println!("There was an error creating a jwt token: {:?}", e);
-            Err(CreateUserError::TokenError)
-        }
-    }
-}
-
-fn is_token_valid(token: &str) -> bool {
-    let validation = Validation {
-        sub: Some(sub.to_owned()),
-        ..Validation::default()
-    };
-    match decode::<Claims>(token, key.as_ref(), &validation) {
-        Ok(_) => true,
-        Err(err) => {
-            println!("There was an error decoding a token: {:?}", err);
-            false
-        }
-    }
-}
-
 fn create_user(
     conn: &mongodb::db::Database,
     email: &str,
@@ -197,7 +158,10 @@ fn create_user(
 
     let hashed_pw = hash(&password, DEFAULT_COST).unwrap();
 
-    let token = create_token()?;
+    let token = match access_token::create() {
+        Err(_) => return Err(CreateUserError::TokenError),
+        Ok(t) => t,
+    };
 
     let coll = conn.collection("users");
     let result = coll
