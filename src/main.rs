@@ -13,9 +13,12 @@ extern crate validator_derive;
 extern crate jsonwebtoken as jwt;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use jwt::{decode, encode, Algorithm, Header, Validation};
+use jwt::{decode, encode, Header, Validation};
 use mongodb::db::ThreadedDatabase;
 use mongodb::Document;
+use rocket::http::Status;
+use rocket::request::{self, FromRequest, Request};
+use rocket::Outcome;
 use rocket_contrib::json::{Json, JsonValue};
 use serde::Serialize;
 use validator::Validate;
@@ -57,9 +60,28 @@ impl User {
     }
 }
 
-#[derive(Serialize)]
-struct UserResponse {
-    user: User,
+impl<'a, 'r> FromRequest<'a, 'r> for User {
+    type Error = ();
+
+    fn from_request(request: &'a Request<'r>) -> request::Outcome<User, ()> {
+        let failed = || Outcome::Failure((Status::Unauthorized, ()));
+
+        let token = match request.headers().get_one("Authorization") {
+            None => return failed(),
+            Some(header) => &header[7..],
+        };
+
+        if is_token_valid(token) == false {
+            println!("token is invalid");
+            return failed()
+        };
+
+        let db = request.guard::<KnotesDBConnection>()?;
+        match user::get_by_access_token(token, &db.collection("users")) {
+            Some(user) => Outcome::Success(user),
+            _ => failed()
+        }
+    }
 }
 
 fn ok<T: Serialize>(body: T) -> JsonValue {
@@ -84,6 +106,16 @@ mod user {
         match coll.find_one(Some(doc! { "email": email}), None).unwrap() {
             Some(user_doc) => Some(User::from(user_doc)),
             None => None,
+        }
+    }
+
+    pub fn get_by_access_token(token: &str, coll: &Collection) -> Option<User> {
+        match coll
+            .find_one(Some(doc! { "access_token": token }), None)
+            .unwrap()
+        {
+            Some(user_doc) => Some(User::from(user_doc)),
+            _ => None,
         }
     }
 }
@@ -112,30 +144,42 @@ enum AuthenticationError {
     InvalidCredentials,
 }
 
-fn create_token() -> Result<String, CreateUserError> {
-    #[derive(Debug, Serialize, Deserialize)]
-    struct Claims {
-        sub: String,
-        company: String,
-        exp: u64,
-    };
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    company: String,
+    exp: u64,
+}
 
+const key: &str = "secret"; // externalize
+const sub: &str = "knotes.com";
+
+fn create_token() -> Result<String, CreateUserError> {
     let my_claims = Claims {
-        sub: "knotes.com".to_owned(),
+        sub: sub.to_owned(),
         company: "akonwi".to_owned(),
         exp: 10000000000,
     };
-    let key = "secret"; // externalize
 
-    let mut header = Header::default();
-    header.kid = Some("signing_key".to_owned()); // externalize key
-    header.alg = Algorithm::HS512;
-
-    match encode(&header, &my_claims, key.as_ref()) {
+    match encode(&Header::default(), &my_claims, key.as_ref()) {
         Ok(t) => Ok(t),
         Err(e) => {
             println!("There was an error creating a jwt token: {:?}", e);
             Err(CreateUserError::TokenError)
+        }
+    }
+}
+
+fn is_token_valid(token: &str) -> bool {
+    let validation = Validation {
+        sub: Some(sub.to_owned()),
+        ..Validation::default()
+    };
+    match decode::<Claims>(token, key.as_ref(), &validation) {
+        Ok(_) => true,
+        Err(err) => {
+            println!("There was an error decoding a token: {:?}", err);
+            false
         }
     }
 }
@@ -171,7 +215,7 @@ fn create_user(
     }
 }
 
-#[post("/auth/create", data = "<params>")]
+#[post("/auth/register", data = "<params>")]
 fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonValue {
     match params.validate() {
         Ok(_) => {
@@ -230,12 +274,17 @@ fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
     }
 }
 
+#[get("/notes")]
+fn get_notes(user: User) -> JsonValue {
+    ok(json!({ "user": user }))
+}
+
 #[database("knotes")]
 struct KnotesDBConnection(mongodb::db::Database);
 
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
-        .mount("/", routes![register, login])
+        .mount("/", routes![register, login, get_notes])
         .launch();
 }
