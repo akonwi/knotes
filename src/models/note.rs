@@ -1,13 +1,22 @@
 use crate::KnotesDBConnection;
+use mongodb::coll::options::{FindOneAndUpdateOptions, ReturnDocument};
 use mongodb::db::ThreadedDatabase;
-use mongodb::Document;
 use mongodb::oid::ObjectId;
+use mongodb::Document;
+use validator::Validate;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
     pub title: String,
     pub body: String,
+}
+
+#[derive(Serialize, Deserialize, Validate)]
+pub struct UpdateNoteParams {
+    #[validate(length(min = 1, message = "Note title is required"))]
+    title: Option<String>,
+    body: Option<String>,
 }
 
 impl Note {
@@ -18,6 +27,45 @@ impl Note {
             body: doc.get_str("body").unwrap().to_string(),
         }
     }
+
+    pub fn update(id: &str, params: UpdateNoteParams, db: &KnotesDBConnection) -> Result<Self, ()> {
+        let coll = db.collection("notes");
+
+        let oid = match ObjectId::with_string(id) {
+            Ok(o) => o,
+            Err(_) => return Err(()),
+        };
+
+        let mut update = doc! {};
+
+        if let Some(body) = params.body {
+            update.insert("body", body);
+        }
+        if let Some(title) = params.title {
+            update.insert("title", title);
+        }
+
+        match coll.find_one_and_update(
+            doc! {"_id": oid},
+            doc! {"$set": update},
+            Some(FindOneAndUpdateOptions {
+                return_document: Some(ReturnDocument::After),
+                max_time_ms: None,
+                projection: None,
+                sort: None,
+                upsert: None,
+                write_concern: None
+            }),
+        ) {
+            Err(_) => {
+                Err(())
+            }
+            Ok(doc_option) => match doc_option {
+                None => Err(()),
+                Some(doc) => Ok(Note::from(doc)),
+            },
+        }
+    }
 }
 
 pub fn get(id: &str, db: &KnotesDBConnection) -> Option<Note> {
@@ -25,9 +73,9 @@ pub fn get(id: &str, db: &KnotesDBConnection) -> Option<Note> {
 
     let oid = match ObjectId::with_string(id) {
         Ok(o) => o,
-        Err(_) => return None
+        Err(_) => return None,
     };
-    
+
     match coll.find_one(Some(doc! {"_id": oid}), None) {
         Ok(doc_option) => match doc_option {
             None => None,

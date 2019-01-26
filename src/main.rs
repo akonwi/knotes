@@ -16,7 +16,7 @@ mod access_token;
 mod models;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use models::note;
+use models::note::{self, Note, UpdateNoteParams};
 use models::user::{self, User};
 use mongodb::db::ThreadedDatabase;
 use rocket_contrib::json::{Json, JsonValue};
@@ -214,12 +214,45 @@ fn get_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
     ok(json!({ "note": note::get(&id, &db) }))
 }
 
+#[put("/notes/<id>", data = "<params>")]
+fn update_note(
+    id: String,
+    params: Json<UpdateNoteParams>,
+    _user: User,
+    db: KnotesDBConnection,
+) -> JsonValue {
+    if let Err(e) = params.validate() {
+        return not_ok(json!({
+            "type": CreateNoteError::InvalidAttributes,
+            "message": CreateNoteError::InvalidAttributes.message(),
+            "errors": e
+        }));
+    };
+
+    match Note::update(&id, params.0, &db) {
+        Ok(note) => ok(json!({ "note": note })),
+        Err(_) => {
+            not_ok(json!({ "type": "DBWrite", "message": "There was an error saving the note" }))
+        }
+    }
+}
+
 #[database("knotes")]
 pub struct KnotesDBConnection(mongodb::db::Database);
 
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
-        .mount("/", routes![register, login, get_notes, create_note, get_note])
+        .mount(
+            "/",
+            routes![
+                register,
+                login,
+                get_notes,
+                create_note,
+                get_note,
+                update_note
+            ],
+        )
         .launch();
 }
