@@ -150,8 +150,8 @@ fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
     };
 
     match verify(&params.password, u.password()) {
-        Ok(b) => {
-            if b {
+        Ok(pw_match) => {
+            if pw_match {
                 ok(json!({ "user": u }))
             } else {
                 failed()
