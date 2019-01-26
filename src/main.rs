@@ -16,8 +16,8 @@ mod access_token;
 mod models;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
-use models::user::{self, User};
 use models::note;
+use models::user::{self, User};
 use mongodb::db::ThreadedDatabase;
 use rocket_contrib::json::{Json, JsonValue};
 use serde::Serialize;
@@ -32,6 +32,13 @@ struct RegistrationParams {
 }
 
 type LoginParams = RegistrationParams;
+
+#[derive(Serialize, Deserialize, Validate)]
+struct CreateNoteParams {
+    #[validate(length(min = 1, message = "Note title is required"))]
+    title: String,
+    body: Option<String>,
+}
 
 fn ok<T: Serialize>(body: T) -> JsonValue {
     json!({
@@ -69,6 +76,21 @@ impl CreateUserError {
 #[derive(Serialize)]
 enum AuthenticationError {
     InvalidCredentials,
+}
+
+#[derive(Serialize)]
+enum CreateNoteError {
+    InvalidAttributes,
+    DBWrite,
+}
+
+impl CreateNoteError {
+    fn message(self) -> &'static str {
+        match self {
+            CreateNoteError::InvalidAttributes => "Note attributes are invalid",
+            CreateNoteError::DBWrite => "There was an error saving the note",
+        }
+    }
 }
 
 fn create_user(
@@ -169,12 +191,30 @@ fn get_notes(user: User, db: KnotesDBConnection) -> JsonValue {
     ok(json!({ "notes": note::find_by_user(&user.id, &db)}))
 }
 
+#[post("/notes", data = "<params>")]
+fn create_note(params: Json<CreateNoteParams>, user: User, db: KnotesDBConnection) -> JsonValue {
+    if let Err(e) = params.validate() {
+        return not_ok(json!({
+            "type": CreateNoteError::InvalidAttributes,
+            "message": CreateNoteError::InvalidAttributes.message(),
+            "errors": e
+        }));
+    };
+
+    match note::create_for_user(&user.id, &params.title, params.body.as_ref(), &db) {
+        Ok(note) => ok(json!({ "note": note })),
+        Err(_) => not_ok(
+            json!({"type": CreateNoteError::DBWrite, "message": CreateNoteError::DBWrite.message()}),
+        ),
+    }
+}
+
 #[database("knotes")]
 pub struct KnotesDBConnection(mongodb::db::Database);
 
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
-        .mount("/", routes![register, login, get_notes])
+        .mount("/", routes![register, login, get_notes, create_note])
         .launch();
 }
