@@ -17,6 +17,7 @@ mod models;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
 use models::user::{self, User};
+use models::note;
 use mongodb::db::ThreadedDatabase;
 use rocket_contrib::json::{Json, JsonValue};
 use serde::Serialize;
@@ -164,8 +165,8 @@ fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
 }
 
 #[get("/notes")]
-fn get_notes(user: User) -> JsonValue {
-    ok(json!({ "user": user }))
+fn get_notes(user: User, db: KnotesDBConnection) -> JsonValue {
+    ok(json!({ "notes": note::find_by_user(&user.id, &db)}))
 }
 
 #[database("knotes")]
