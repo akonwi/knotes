@@ -209,12 +209,17 @@ fn create_note(params: Json<CreateNoteParams>, user: User, db: KnotesDBConnectio
     }
 }
 
+#[get("/notes/<id>")]
+fn get_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
+    ok(json!({ "note": note::get(&id, &db) }))
+}
+
 #[database("knotes")]
 pub struct KnotesDBConnection(mongodb::db::Database);
 
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
-        .mount("/", routes![register, login, get_notes, create_note])
+        .mount("/", routes![register, login, get_notes, create_note, get_note])
         .launch();
 }

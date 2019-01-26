@@ -10,6 +10,7 @@ use rocket::Outcome;
 pub struct User {
     pub id: String,
     pub email: String,
+    #[serde(rename = "accessToken")]
     pub access_token: Option<String>,
     #[serde(skip_serializing)]
     password: String,

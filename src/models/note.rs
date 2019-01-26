@@ -1,6 +1,7 @@
 use crate::KnotesDBConnection;
 use mongodb::db::ThreadedDatabase;
 use mongodb::Document;
+use mongodb::oid::ObjectId;
 
 #[derive(Serialize)]
 pub struct Note {
@@ -16,6 +17,23 @@ impl Note {
             title: doc.get_str("title").unwrap().to_string(),
             body: doc.get_str("body").unwrap().to_string(),
         }
+    }
+}
+
+pub fn get(id: &str, db: &KnotesDBConnection) -> Option<Note> {
+    let coll = db.collection("notes");
+
+    let oid = match ObjectId::with_string(id) {
+        Ok(o) => o,
+        Err(_) => return None
+    };
+    
+    match coll.find_one(Some(doc! {"_id": oid}), None) {
+        Ok(doc_option) => match doc_option {
+            None => None,
+            Some(doc) => Some(Note::from(doc)),
+        },
+        Err(_) => None,
     }
 }
 
@@ -43,7 +61,7 @@ pub fn create_for_user(
 ) -> Result<Note, ()> {
     let coll = db.collection("notes");
 
-    let id = match coll
+    let note_id = match coll
         .insert_one(
             doc! {"userId": id, "title": title, "body": body.unwrap_or(&"".to_owned())},
             None,
@@ -59,11 +77,8 @@ pub fn create_for_user(
         None => return Err(()),
     };
 
-    match coll.find_one(Some(doc! {"_id": id}), None) {
-        Ok(doc_option) => match doc_option {
-            None => Err(()),
-            Some(doc) => Ok(Note::from(doc)),
-        },
-        Err(_) => Err(()),
+    match get(&note_id.to_string(), db) {
+        Some(note) => Ok(note),
+        None => Err(()),
     }
 }
