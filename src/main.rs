@@ -237,6 +237,14 @@ fn update_note(
     }
 }
 
+#[delete("/notes/<id>")]
+fn delete_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
+    match Note::delete(&id, &db) {
+        Ok(_) => ok(()),
+        Err(_) => not_ok(())
+    }
+}
+
 #[database("knotes")]
 pub struct KnotesDBConnection(mongodb::db::Database);
 
@@ -251,7 +259,8 @@ fn main() {
                 get_notes,
                 create_note,
                 get_note,
-                update_note
+                update_note,
+                delete_note,
             ],
         )
         .launch();

@@ -66,6 +66,20 @@ impl Note {
             },
         }
     }
+
+    pub fn delete(id: &str, db: &KnotesDBConnection) -> Result<(), ()> {
+        let coll = db.collection("notes");
+
+        let oid = match ObjectId::with_string(id) {
+            Ok(o) => o,
+            Err(_) => return Err(()),
+        };
+
+        match coll.find_one_and_delete(doc!{"_id": oid}, None) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(())
+        }
+    }
 }
 
 pub fn get(id: &str, db: &KnotesDBConnection) -> Option<Note> {
