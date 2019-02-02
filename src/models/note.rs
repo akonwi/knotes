@@ -54,12 +54,10 @@ impl Note {
                 projection: None,
                 sort: None,
                 upsert: None,
-                write_concern: None
+                write_concern: None,
             }),
         ) {
-            Err(_) => {
-                Err(())
-            }
+            Err(_) => Err(()),
             Ok(doc_option) => match doc_option {
                 None => Err(()),
                 Some(doc) => Ok(Note::from(doc)),
@@ -75,9 +73,9 @@ impl Note {
             Err(_) => return Err(()),
         };
 
-        match coll.find_one_and_delete(doc!{"_id": oid}, None) {
+        match coll.find_one_and_delete(doc! {"_id": oid}, None) {
             Ok(_) => Ok(()),
-            Err(_) => Err(())
+            Err(_) => Err(()),
         }
     }
 }
