@@ -14,6 +14,7 @@ extern crate jsonwebtoken as jwt;
 
 mod access_token;
 mod models;
+mod cors;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
 use models::note::{self, Note, UpdateNoteParams};
@@ -251,6 +252,7 @@ pub struct KnotesDBConnection(mongodb::db::Database);
 fn main() {
     rocket::ignite()
         .attach(KnotesDBConnection::fairing())
+        .attach(cors::CORS())
         .mount(
             "/",
             routes![

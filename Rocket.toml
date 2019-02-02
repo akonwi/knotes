@@ -1,2 +1,5 @@
 [global.databases]
 knotes = { url = "mongodb://localhost:27017/knotes" }
+
+[development]
+address = "0.0.0.0"
