@@ -13,8 +13,8 @@ extern crate validator_derive;
 extern crate jsonwebtoken as jwt;
 
 mod access_token;
-mod models;
 mod cors;
+mod models;
 
 use bcrypt::{hash, verify, DEFAULT_COST};
 use models::note::{self, Note, UpdateNoteParams};
@@ -212,7 +212,7 @@ fn create_note(params: Json<CreateNoteParams>, user: User, db: KnotesDBConnectio
 
 #[get("/notes/<id>")]
 fn get_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
-    ok(json!({ "note": note::get(&id, &db) }))
+    ok(json!({ "note": note::get_with_string_id(&id, &db) }))
 }
 
 #[put("/notes/<id>", data = "<params>")]
@@ -242,7 +242,7 @@ fn update_note(
 fn delete_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
     match Note::delete(&id, &db) {
         Ok(_) => ok(()),
-        Err(_) => not_ok(())
+        Err(_) => not_ok(()),
     }
 }
 

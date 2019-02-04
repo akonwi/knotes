@@ -80,20 +80,25 @@ impl Note {
     }
 }
 
-pub fn get(id: &str, db: &KnotesDBConnection) -> Option<Note> {
+pub fn get(id: &ObjectId, db: &KnotesDBConnection) -> Option<Note> {
     let coll = db.collection("notes");
 
-    let oid = match ObjectId::with_string(id) {
-        Ok(o) => o,
-        Err(_) => return None,
-    };
-
-    match coll.find_one(Some(doc! {"_id": oid}), None) {
+    match coll.find_one(Some(doc! {"_id": id.clone()}), None) {
         Ok(doc_option) => match doc_option {
-            None => None,
+            None => {
+                println!("found no note for {}", id);
+                None
+            }
             Some(doc) => Some(Note::from(doc)),
         },
         Err(_) => None,
+    }
+}
+
+pub fn get_with_string_id(id: &str, db: &KnotesDBConnection) -> Option<Note> {
+    match ObjectId::with_string(id) {
+        Ok(oid) => get(&oid, db),
+        Err(_) => return None,
     }
 }
 
@@ -134,11 +139,17 @@ pub fn create_for_user(
             }
             res.inserted_id.unwrap()
         }
-        None => return Err(()),
+        None => {
+            println!("There was an error saving note");
+            return Err(());
+        }
     };
 
-    match get(&note_id.to_string(), db) {
+    match get(&note_id.as_object_id().unwrap(), db) {
         Some(note) => Ok(note),
-        None => Err(()),
+        None => {
+            println!("There was an error fething the note");
+            Err(())
+        }
     }
 }

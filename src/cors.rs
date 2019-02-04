@@ -17,10 +17,7 @@ impl Fairing for CORS {
     fn on_response(&self, request: &Request, response: &mut Response) {
         if request.method() == Method::Options || response.content_type() == Some(ContentType::JSON)
         {
-            response.set_header(Header::new(
-                "Access-Control-Allow-Origin",
-                "*",
-            ));
+            response.set_header(Header::new("Access-Control-Allow-Origin", "*"));
             response.set_header(Header::new(
                 "Access-Control-Allow-Methods",
                 "POST, GET, OPTIONS, DELETE",
