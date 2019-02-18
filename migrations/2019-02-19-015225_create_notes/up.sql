@@ -1,0 +1,10 @@
+-- Your SQL goes here
+CREATE TABLE notes (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  title VARCHAR(100) NOT NULL,
+  body TEXT NOT NULL,
+  FOREIGN KEY (user_id)
+  REFERENCES users(id)
+  ON DELETE CASCADE
+)

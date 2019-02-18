@@ -1,5 +1,5 @@
-[global.databases]
-knotes = { url = "mongodb://localhost:27017/knotes" }
-
 [development]
 address = "0.0.0.0"
+
+[development.databases]
+knotes = { url = "mysql://root:Foobaroni10@localhost:3306/knotes" }

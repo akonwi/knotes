@@ -1,7 +1,7 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 #[macro_use]
-extern crate mongodb;
+extern crate diesel;
 #[macro_use]
 extern crate rocket;
 #[macro_use]
@@ -15,11 +15,10 @@ extern crate jsonwebtoken as jwt;
 mod access_token;
 mod cors;
 mod models;
+mod schema;
 
-use bcrypt::{hash, verify, DEFAULT_COST};
-use models::note::{self, Note, UpdateNoteParams};
-use models::user::{self, User};
-use mongodb::db::ThreadedDatabase;
+use models::note::{CreateNoteParams, Note, NoteError, UpdateNoteParams};
+use models::user::{CreateUserError, User};
 use rocket_contrib::json::{Json, JsonValue};
 use serde::Serialize;
 use validator::Validate;
@@ -33,13 +32,6 @@ struct RegistrationParams {
 }
 
 type LoginParams = RegistrationParams;
-
-#[derive(Serialize, Deserialize, Validate)]
-struct CreateNoteParams {
-    #[validate(length(min = 1, message = "Note title is required"))]
-    title: String,
-    body: Option<String>,
-}
 
 fn ok<T: Serialize>(body: T) -> JsonValue {
     json!({
@@ -56,83 +48,15 @@ fn not_ok<T: Serialize>(body: T) -> JsonValue {
 }
 
 #[derive(Serialize)]
-enum CreateUserError {
-    AlreadyExists,
-    InvalidAttributes,
-    DBWrite,
-    TokenError,
-}
-
-impl CreateUserError {
-    fn message(self) -> &'static str {
-        match self {
-            CreateUserError::AlreadyExists => "Email is in use",
-            CreateUserError::InvalidAttributes => "Attributes are invalid",
-            CreateUserError::DBWrite => "There was an error writing to the databse",
-            CreateUserError::TokenError => "Unable to create token",
-        }
-    }
-}
-
-#[derive(Serialize)]
 enum AuthenticationError {
     InvalidCredentials,
-}
-
-#[derive(Serialize)]
-enum CreateNoteError {
-    InvalidAttributes,
-    DBWrite,
-}
-
-impl CreateNoteError {
-    fn message(self) -> &'static str {
-        match self {
-            CreateNoteError::InvalidAttributes => "Note attributes are invalid",
-            CreateNoteError::DBWrite => "There was an error saving the note",
-        }
-    }
-}
-
-fn create_user(
-    conn: &mongodb::db::Database,
-    email: &str,
-    password: &str,
-) -> Result<User, CreateUserError> {
-    let collection = conn.collection("users");
-
-    if let Some(_) = user::get_by_email(email, &collection) {
-        return Err(CreateUserError::AlreadyExists);
-    };
-
-    let hashed_pw = hash(&password, DEFAULT_COST).unwrap();
-
-    let token = match access_token::create() {
-        Err(_) => return Err(CreateUserError::TokenError),
-        Ok(t) => t,
-    };
-
-    let coll = conn.collection("users");
-    let result = coll
-        .insert_one(
-            doc! {"email": email, "password": hashed_pw, "access_token": token},
-            None,
-        )
-        .unwrap();
-    match coll
-        .find_one(Some(doc! {"_id": result.inserted_id.unwrap()}), None)
-        .unwrap()
-    {
-        Some(doc) => Ok(User::from(doc)),
-        None => Err(CreateUserError::DBWrite),
-    }
 }
 
 #[post("/auth/register", data = "<params>")]
 fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonValue {
     match params.validate() {
         Ok(_) => {
-            let user = match create_user(&conn, &params.email, &params.password) {
+            let user = match User::create(&conn, &params.email, &params.password) {
                 Ok(user) => user,
                 Err(e) => {
                     return not_ok(json!({
@@ -155,7 +79,7 @@ fn register(params: Json<RegistrationParams>, conn: KnotesDBConnection) -> JsonV
 }
 
 #[post("/auth/login", data = "<params>")]
-fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
+fn login(params: Json<LoginParams>, db: KnotesDBConnection) -> JsonValue {
     fn failed() -> JsonValue {
         not_ok(json!({
             "type": AuthenticationError::InvalidCredentials,
@@ -167,87 +91,84 @@ fn login(params: Json<LoginParams>, conn: KnotesDBConnection) -> JsonValue {
         return failed();
     }
 
-    let u = match user::get_by_email(&params.email, &conn.collection("users")) {
+    let user = match User::get_by_email(&params.email, &db) {
         None => return failed(),
         Some(u) => u,
     };
 
-    match verify(&params.password, u.password()) {
-        Ok(pw_match) => {
-            if pw_match {
-                ok(json!({ "user": u }))
-            } else {
-                failed()
-            }
-        }
-        Err(e) => {
-            println!("Error verifying password: #{:?}", e);
-            failed()
-        }
+    match user.verify_password(&params.password) {
+        true => ok(json!({ "user": user })),
+        false => failed(),
     }
 }
 
 #[get("/notes")]
 fn get_notes(user: User, db: KnotesDBConnection) -> JsonValue {
-    ok(json!({ "notes": note::find_by_user(&user.id, &db)}))
+    ok(json!({ "notes": Note::find_by_user(&user.id, &db)}))
 }
 
 #[post("/notes", data = "<params>")]
 fn create_note(params: Json<CreateNoteParams>, user: User, db: KnotesDBConnection) -> JsonValue {
     if let Err(e) = params.validate() {
         return not_ok(json!({
-            "type": CreateNoteError::InvalidAttributes,
-            "message": CreateNoteError::InvalidAttributes.message(),
+            "type": NoteError::InvalidAttributes,
+            "message": NoteError::InvalidAttributes.message(),
             "errors": e
         }));
     };
 
-    match note::create_for_user(&user.id, &params.title, params.body.as_ref(), &db) {
+    match Note::create_for_user(&user.id, &params, &db) {
         Ok(note) => ok(json!({ "note": note })),
-        Err(_) => not_ok(
-            json!({"type": CreateNoteError::DBWrite, "message": CreateNoteError::DBWrite.message()}),
-        ),
+        Err(e) => not_ok(json!({"type": e, "message": e.message()})),
     }
 }
 
 #[get("/notes/<id>")]
-fn get_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
-    ok(json!({ "note": note::get_with_string_id(&id, &db) }))
+fn get_note(id: i32, _user: User, db: KnotesDBConnection) -> JsonValue {
+    ok(json!({ "note": Note::get(id, &db) }))
 }
 
 #[put("/notes/<id>", data = "<params>")]
 fn update_note(
-    id: String,
+    id: i32,
     params: Json<UpdateNoteParams>,
     _user: User,
     db: KnotesDBConnection,
 ) -> JsonValue {
     if let Err(e) = params.validate() {
         return not_ok(json!({
-            "type": CreateNoteError::InvalidAttributes,
-            "message": CreateNoteError::InvalidAttributes.message(),
+            "type": NoteError::InvalidAttributes,
+            "message": NoteError::InvalidAttributes.message(),
             "errors": e
         }));
     };
 
-    match Note::update(&id, params.0, &db) {
-        Ok(note) => ok(json!({ "note": note })),
-        Err(_) => {
-            not_ok(json!({ "type": "DBWrite", "message": "There was an error saving the note" }))
+    let mut note = match Note::get(id, &db) {
+        None => {
+            return not_ok(json!({
+                "type": NoteError::NotFound,
+                "message": NoteError::NotFound.message()
+            }));
         }
+        Some(n) => n,
+    };
+
+    match note.update(params.title, params.body, &db) {
+        Ok(note) => ok(json!({ "note": note })),
+        Err(e) => not_ok(json!({ "type": e, "message": e.message() })),
     }
 }
 
 #[delete("/notes/<id>")]
-fn delete_note(id: String, _user: User, db: KnotesDBConnection) -> JsonValue {
-    match Note::delete(&id, &db) {
+fn delete_note(id: i32, _user: User, db: KnotesDBConnection) -> JsonValue {
+    match Note::delete(id, &db) {
         Ok(_) => ok(()),
         Err(_) => not_ok(()),
     }
 }
 
 #[database("knotes")]
-pub struct KnotesDBConnection(mongodb::db::Database);
+pub struct KnotesDBConnection(diesel::MysqlConnection);
 
 fn main() {
     rocket::ignite()
